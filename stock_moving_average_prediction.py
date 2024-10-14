@@ -1,20 +1,16 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
-import logging
 from datetime import datetime
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill
+import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Function to calculate RSI
-
-
+# Function to calculate the Relative Strength Index (RSI)
 def calculate_rsi(data, window=14):
     delta = data['Close'].diff(1)
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
@@ -23,15 +19,47 @@ def calculate_rsi(data, window=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# Fetch data
-
-
+# Function to fetch stock data
 def fetch_data(ticker):
-    logging.info("Fetching data...")
     data = yf.download(ticker, start="2020-01-01", end="2023-01-01")
-    logging.info("Data fetched successfully.")
     return data
 
+# Function for backtesting the trading strategy
+def backtest_strategy(data, predictions):
+    initial_balance = 10000  # Starting balance
+    balance = initial_balance
+    position = 0  # No shares held initially
+    trades = []  # To record trades
+
+    # Loop through each data point to simulate trading
+    for i in range(len(data)):
+        # Buy signal
+        if predictions[i] == 1 and position == 0:
+            position = balance / data['Close'].iloc[i]  # Buy shares
+            balance = 0  # Spend all balance
+            trades.append(('BUY', data.index[i], data['Close'].iloc[i]))
+
+        # Sell signal
+        elif predictions[i] == 0 and position > 0:
+            balance = position * data['Close'].iloc[i]  # Sell shares
+            trades.append(('SELL', data.index[i], data['Close'].iloc[i]))
+            position = 0  # No shares held
+
+    # Final balance calculation if still holding shares
+    if position > 0:
+        balance = position * data['Close'].iloc[-1]
+        trades.append(('SELL', data.index[-1], data['Close'].iloc[-1]))
+
+    return balance, trades
+
+# Function to highlight rows based on prediction
+def highlight_rows(row):
+    if row['Predicted'] == 1:
+        return ['background-color: green'] * len(row)  # Green for buy
+    elif row['Predicted'] == 0:
+        return ['background-color: yellow'] * len(row)  # Yellow for sell
+    else:
+        return [''] * len(row)  # No color
 
 # Main execution
 if __name__ == "__main__":
@@ -39,80 +67,59 @@ if __name__ == "__main__":
     ticker = 'AAPL'
     data = fetch_data(ticker)
 
-    # Feature Engineering
-    data['MA_50'] = data['Close'].rolling(window=50).mean()
-    data['MA_200'] = data['Close'].rolling(window=200).mean()
-    data['RSI'] = calculate_rsi(data)
-    data.dropna(inplace=True)
+    # Feature engineering
+    data['MA_50'] = data['Close'].rolling(window=50).mean()  # 50-day moving average
+    data['MA_200'] = data['Close'].rolling(window=200).mean()  # 200-day moving average
+    data['RSI'] = calculate_rsi(data)  # Calculate RSI
+    data.dropna(inplace=True)  # Remove rows with NaN values
 
-    # Create target variable
-    data['Target'] = np.where(data['Close'].shift(-1) > data['Close'], 1, 0)
+    # Create target variable for predictions
+    data['Target'] = np.where(data['Close'].shift(-1) > data['Close'], 1, 0)  # Price increase
 
     # Prepare features and target variable
     features = ['Close', 'MA_50', 'MA_200', 'RSI']
     X = data[features]
     y = data['Target']
 
-    # Split data into training and test sets
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42)
+    # Split data for training and testing
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # Train model using Grid Search for hyperparameter tuning
+    # Train the Random Forest model
     model = RandomForestClassifier()
-    param_grid = {'n_estimators': [50, 100], 'max_depth': [None, 10, 20]}
-    grid_search = GridSearchCV(model, param_grid, cv=5)
-    grid_search.fit(X_train, y_train)
+    model.fit(X_train, y_train)
 
-    logging.info("Model trained with best parameters.")
-    best_model = grid_search.best_estimator_
+    # Make predictions for the entire dataset
+    predictions = model.predict(X)
 
-    # Make predictions
-    predictions = best_model.predict(X_test)
-
-    # Evaluate model
-    report = classification_report(y_test, predictions)
-    logging.info(f"Classification Report:\n{report}")
+    # Backtest the strategy
+    final_balance, trades = backtest_strategy(data, predictions)
 
     # Add predictions to the DataFrame
-    data.loc[data.index.isin(X_test.index), 'Predicted'] = predictions
+    data['Predicted'] = predictions
 
     # Create descriptions for predictions
     data['Description'] = np.where(data['Predicted'] == 1,
-                                   'The model predicts a price increase tomorrow, indicating positive market sentiment.',
-                                   'The model predicts no price increase or a decrease tomorrow, indicating negative or neutral market sentiment.')
+                                   'The model predicts a price increase tomorrow.',
+                                   'The model predicts no price increase or a decrease tomorrow.')
 
-    # Select last 20 rows
+    # Select last 20 rows for highlighting
     last_20_rows = data.tail(20)
 
-    # Create an Excel writer object
-    excel_filename = f"stock_predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
-        last_20_rows.to_excel(writer, sheet_name='Predictions', index=True)
+    # Apply highlighting for the last 20 rows
+    styled_data = last_20_rows.style.apply(highlight_rows, axis=1)
 
-        # Access the workbook and sheet
-        workbook = writer.book
-        sheet = writer.sheets['Predictions']
+    # Save results to CSV
+    csv_filename = f"stock_predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    last_20_rows.to_csv(csv_filename, index=True)
+    logging.info(f"Results saved to {csv_filename}")
 
-        # Define fill colors for green and yellow
-        green_fill = PatternFill(start_color='00FF00',
-                                 end_color='00FF00', fill_type='solid')
-        yellow_fill = PatternFill(
-            start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+    # Save styled DataFrame to an Excel file
+    excel_filename = f"styled_stock_predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    styled_data.to_excel(excel_filename, index=True, engine='openpyxl')
+    logging.info(f"Styled results saved to {excel_filename}")
 
-        # Apply conditional formatting
-        # +2 to account for header row
-        for row in range(2, last_20_rows.shape[0] + 2):
-            # Get the predicted value
-            predicted_value = last_20_rows['Predicted'].iloc[row - 2]
-
-            if predicted_value == 1:
-                # Apply green fill for buy predictions
-                for col in range(1, last_20_rows.shape[1] + 1):
-                    sheet.cell(row=row, column=col).fill = green_fill
-            elif predicted_value == 0:
-                # Apply yellow fill for hold/sell predictions
-                for col in range(1, last_20_rows.shape[1] + 1):
-                    sheet.cell(row=row, column=col).fill = yellow_fill
-
-    logging.info(
-        f"Excel file '{excel_filename}' generated successfully with predictions.")
+    # Output final balance and trades executed
+    print(f"Final balance: ${final_balance:.2f}")
+    print("Trades executed:")
+    for trade in trades:
+        print(trade)
