@@ -16,7 +16,22 @@ logging.basicConfig(level=logging.INFO)
 # Function to calculate RSI
 
 
-def calculate_rsi(data, window=14):
+"""
+Calculate Relative Strength Index (RSI) for a given stock data.
+
+Parameters
+----------
+data : pandas.DataFrame
+Stock data with 'Close' column.
+window : int, optional
+Window size for RSI calculation. Defaults to 14.
+
+Returns
+-------
+pandas.Series
+RSI values for given data.
+"""
+def calculate_rsi(data, window=14):    
     delta = data['Close'].diff(1)
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
@@ -27,6 +42,19 @@ def calculate_rsi(data, window=14):
 # Fetch data
 
 
+"""
+Fetch stock data from Yahoo Finance.
+
+Parameters
+----------
+ticker : str
+    Ticker symbol of the stock.
+
+Returns
+-------
+pandas.DataFrame
+    Stock data with columns 'Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close'.
+"""
 def fetch_data(ticker):
     logging.info("Fetching data...")
     data = yf.download(ticker, start="2020-01-01", end="2023-01-01")
@@ -36,55 +64,62 @@ def fetch_data(ticker):
 # Backtest strategy
 
 
+"""
+Simulate trading strategy based on predictions and calculate trade summary.
+
+Parameters
+----------
+data : pandas.DataFrame
+    A DataFrame containing stock data with a 'Predicted' column indicating buy (1) or sell (0) signals.
+initial_balance : float, optional
+    The initial amount of money available for trading (default is 10000).
+
+Returns
+-------
+list of dict
+    A list of dictionaries, each representing a trade with keys 'Trade', 'Date', 'Price', 'Shares', 'Balance', and 'Profit/Loss'.
+"""
 def backtest_strategy(data, initial_balance=10000):
     balance = initial_balance
     shares = 0
     trade_summary = []
 
     for index, row in data.iterrows():
-        trade_time = row.name  # Capture date and time of trade
+        trade_time = row.name.date()
 
-        # Risk Management: Ensure enough balance to buy shares
-        if row['Predicted'] == 1 and balance >= row['Close']:
-            # Allow fractional shares if necessary
+        # Buying Logic
+        if row['Predicted'] == 1 and balance >= row['Close'] and shares == 0:
             shares = balance / row['Close']
             balance -= shares * row['Close']
             trade_summary.append({
                 'Trade': 'Buy',
-                'Date': trade_time.date(),
-                'Time': trade_time.time(),
+                'Date': trade_time,
                 'Price': row['Close'],
                 'Shares': shares,
                 'Balance': balance,
-                'Profit/Loss': 0  # Placeholder for future profit/loss calculation
+                'Profit/Loss': 0
             })
 
+        # Selling Logic
         elif row['Predicted'] == 0 and shares > 0:
-            # Ensure the price is treated as float
-            price = float(row['Close'])
+            price = row['Close']
+            profit_loss = (price - float(trade_summary[-1]['Price'])) * shares
+            balance += shares * price
             trade_summary.append({
                 'Trade': 'Sell',
-                'Date': trade_time.date(),
-                'Time': trade_time.time(),
+                'Date': trade_time,
                 'Price': price,
                 'Shares': shares,
-                'Balance': balance + shares * price,
-                'Profit/Loss': (price - float(trade_summary[-1]['Price'])) * shares
+                'Balance': balance,
+                'Profit/Loss': profit_loss
             })
-            balance += shares * price  # Update balance after selling
-            shares = 0
-
-    if not trade_summary:
-        logging.warning("No trades were executed during backtesting.")
-        return []
-
-    final_balance = balance + \
-        (shares * data.iloc[-1]['Close'] if shares > 0 else 0)
-    profit_loss = final_balance - initial_balance
-    logging.info(f"Final portfolio value: ${final_balance:.2f}")
-    logging.info(f"Profit/Loss: ${profit_loss:.2f}")
+            shares = 0  # Reset shares after selling
 
     return trade_summary
+
+
+# Call the function with your data
+trade_results = backtest_strategy(data)
 
 
 # Main execution
